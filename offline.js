@@ -1,4 +1,4 @@
-// OFFLINE GUARD — blokir layar saat internet mati
+// OFFLINE GUARD — blokir layar saat internet matii
 (function() {
   function setupOfflineGuard() {
     const overlay = document.createElement('div');
