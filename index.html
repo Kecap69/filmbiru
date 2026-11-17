@@ -26,7 +26,7 @@
   <meta name="twitter:description" content="Platform streaming dewasa terpercaya. Nonton film 18+ dengan kualitas HD kapan saja dan di mana saja."/>
   <meta name="twitter:image"       content="https://filmbiru.up.railway.app/background/priview.jpg"/>
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="/style.css?v=10"/>
+  <link rel="stylesheet" href="/style.css?v=11"/>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
@@ -268,6 +268,7 @@
         <span class="ac-time" id="admin-stat-time">—</span>
       </div>
 
+      <button class="ac-upload-btn" type="button" onclick="openUploadModal()"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span>Upload Video</span></button>
       <button class="as-logout ac-logout-mobile" onclick="adminLogout()"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:5px;margin-bottom:1px"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Logout</button>
     </header>
 
@@ -497,8 +498,43 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 
+<!-- ================================================================
+     MODAL UPLOAD VIDEO (Admin)
+     ================================================================ -->
+<div class="upload-modal" id="upload-modal" role="dialog" aria-modal="true" aria-labelledby="up-title">
+  <div class="up-card">
+    <div class="up-head">
+      <h3 id="up-title">Upload Video</h3>
+      <button type="button" class="up-x" onclick="closeUploadModal()" aria-label="Tutup">✕</button>
+    </div>
+
+    <input type="file" id="up-file" hidden
+           accept=".mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime"
+           onchange="onUploadFileChosen(this)"/>
+    <button type="button" class="up-pick" id="up-pick" onclick="document.getElementById('up-file').click()">Pilih video…</button>
+    <div class="up-hint">Format: mp4, webm, mov, m4v. Thumbnail dibuat otomatis dari isi video.</div>
+
+    <div class="up-preview" id="up-preview" style="display:none;">
+      <img id="up-thumb" alt="Thumbnail"/>
+      <div class="up-meta">
+        <div class="up-name" id="up-name"></div>
+        <div class="up-size" id="up-size"></div>
+        <div class="up-note" id="up-thumb-note"></div>
+      </div>
+    </div>
+
+    <div class="up-progress" id="up-progress" style="display:none;">
+      <div class="up-bar"><div id="up-bar-fill"></div></div>
+      <span id="up-pct">0%</span>
+    </div>
+    <div class="up-status" id="up-status"></div>
+
+    <button type="button" class="up-start" id="up-start" onclick="startUpload()" disabled>Upload</button>
+  </div>
+</div>
+
 <script src="/offline.js?v=1"></script>
-<script src="/app.js?v=20"></script>
+<script src="/app.js?v=21"></script>
 
 <script>
 /* ── Login Cover Slideshow ─────────────────────────────────────

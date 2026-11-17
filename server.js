@@ -41,7 +41,8 @@ const ADMIN_USER = {
 // ===========================
 // CLOUDFLARE R2 CONFIG
 // ===========================
-const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 for (const k of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET']) {
   if (!process.env[k]) throw new Error(`[FATAL] ${k} wajib diset di environment variable!`);
@@ -49,7 +50,8 @@ for (const k of ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R
 
 const R2_BUCKET = process.env.R2_BUCKET;
 // Opsional: hanya list file di dalam folder/prefix tertentu, mis. "film/"
-const R2_PREFIX = process.env.R2_PREFIX || '';
+let R2_PREFIX = process.env.R2_PREFIX || '';
+if (R2_PREFIX && !R2_PREFIX.endsWith('/')) R2_PREFIX += '/';
 
 const r2 = new S3Client({
   region: 'auto',
@@ -58,9 +60,17 @@ const r2 = new S3Client({
     accessKeyId:     process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
+  // R2 tidak mendukung checksum otomatis SDK terbaru di presigned URL
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+  responseChecksumValidation: 'WHEN_REQUIRED',
 });
 
 const VIDEO_EXT_REGEX = /\.(mp4|webm|mov|m4v|mkv)$/i;
+const IMG_EXT_REGEX   = /\.(jpg|jpeg|png|webp)$/i;
+const IMG_MIME        = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+// Format yang boleh diupload admin (harus bisa diputar browser)
+const UPLOAD_EXT      = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 4096) * 1024 * 1024;
 const VIDEO_MIME = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska' };
 
 // ===========================
@@ -110,9 +120,21 @@ async function fetchFilms() {
       token = r.NextContinuationToken;
     } while (token);
 
+    // Peta key (huruf kecil) → key asli, untuk mencocokkan thumbnail
+    const keyMap = new Map(objs.map(o => [o.Key.toLowerCase(), o.Key]));
+    const findThumbKey = (videoKey) => {
+      const base = videoKey.replace(/\.[^/.]+$/, '').toLowerCase();
+      for (const e of ['jpg', 'jpeg', 'png', 'webp']) {
+        const k = keyMap.get(`${base}.${e}`);
+        if (k) return k;
+      }
+      return null;
+    };
+
+    // Terbaru di atas
     const videos = objs
       .filter(o => VIDEO_EXT_REGEX.test(o.Key))
-      .sort((a, b) => a.Key.localeCompare(b.Key, undefined, { numeric: true }));
+      .sort((a, b) => new Date(b.LastModified || 0) - new Date(a.LastModified || 0));
 
     if (videos.length === 0) {
       console.warn('[R2] Tidak ada video ditemukan, return cache lama');
@@ -120,14 +142,15 @@ async function fetchFilms() {
     }
 
     const films = videos.map((o, index) => {
-      const ext = o.Key.split('.').pop().toLowerCase();
+      const ext      = o.Key.split('.').pop().toLowerCase();
+      const thumbKey = findThumbKey(o.Key);
       return {
         id:       index + 1,
         fileId:   o.Key,            // key objek R2 dipakai sebagai ID
         title:    o.Key.split('/').pop().replace(/\.[^/.]+$/, ''),
         desc:     'Cloudflare R2',
         videoId:  o.Key,
-        thumb:    '',               // R2 tidak membuat thumbnail otomatis → pakai placeholder
+        thumb:    thumbKey ? `/api/proxy-thumb?id=${encodeURIComponent(thumbKey)}` : '',
         mimeType: VIDEO_MIME[ext] || 'video/mp4',
         gradient: GRADIENTS_POOL[index % GRADIENTS_POOL.length],
         duration: '—',
@@ -976,6 +999,106 @@ app.get('/api/proxy-video', async (req, res) => {
     }
     console.error('[PROXY] R2 error:', err.name, err.message);
     if (!res.headersSent) res.status(502).json({ error: 'Video tidak dapat dimuat dari R2' });
+  }
+});
+
+// ================================================================
+// PROXY THUMBNAIL — gambar thumbnail dari R2 (bucket tetap private)
+// GET /api/proxy-thumb?id=OBJECT_KEY&token=TOKEN
+// ================================================================
+app.get('/api/proxy-thumb', async (req, res) => {
+  const token = (req.headers['authorization'] || '').split(' ')[1] || req.query.token;
+  if (!token) return res.status(401).end();
+  try { jwt.verify(token, JWT_SECRET); } catch { return res.status(401).end(); }
+
+  const key = req.query.id;
+  if (!key || typeof key !== 'string') return res.status(400).end();
+  if (!IMG_EXT_REGEX.test(key) || (R2_PREFIX && !key.startsWith(R2_PREFIX))) return res.status(403).end();
+
+  try {
+    const out = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    const ext = key.split('.').pop().toLowerCase();
+    res.setHeader('Content-Type',  out.ContentType || IMG_MIME[ext] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    if (out.ContentLength != null) res.setHeader('Content-Length', out.ContentLength);
+    out.Body.on('error', () => res.destroy());
+    req.on('close', () => out.Body.destroy());
+    out.Body.pipe(res);
+  } catch (err) {
+    if (!res.headersSent) res.status(404).end();
+  }
+});
+
+// ================================================================
+// ADMIN UPLOAD — beri URL upload langsung ke R2 (video tidak lewat server)
+// POST /api/admin/upload-url  { filename, size }
+// ================================================================
+function requireAdmin(req, res) {
+  const token = (req.headers['authorization'] || '').split(' ')[1];
+  if (!token) { res.status(401).json({ success: false, message: 'Unauthorized' }); return null; }
+  try {
+    const u = jwt.verify(token, JWT_SECRET);
+    if (u.role !== 'admin') { res.status(403).json({ success: false, message: 'Hanya admin yang boleh upload' }); return null; }
+    return u;
+  } catch {
+    res.status(401).json({ success: false, message: 'Token tidak valid' });
+    return null;
+  }
+}
+
+async function r2KeyExists(key) {
+  try {
+    await r2.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    return true;
+  } catch (err) {
+    if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) return false;
+    throw err;
+  }
+}
+
+app.post('/api/admin/upload-url', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  try {
+    const { filename, size } = req.body || {};
+    if (typeof filename !== 'string' || !filename.trim()) {
+      return res.status(400).json({ success: false, message: 'Nama file kosong' });
+    }
+
+    const ext       = (filename.split('.').pop() || '').toLowerCase();
+    const videoType = UPLOAD_EXT[ext];
+    if (!videoType) {
+      return res.status(400).json({ success: false, message: 'Format tidak didukung. Pakai mp4, webm, mov, atau m4v.' });
+    }
+    if (!Number.isFinite(size) || size <= 0 || size > MAX_UPLOAD_BYTES) {
+      return res.status(400).json({ success: false, message: `Ukuran file maksimal ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB` });
+    }
+
+    // Bersihkan nama file (tanpa path / karakter aneh)
+    let base = filename.replace(/\.[^/.]+$/, '')
+      .replace(/[^\p{L}\p{N}._() -]/gu, '_')
+      .replace(/\s+/g, ' ')
+      .replace(/^\.+/, '')
+      .trim()
+      .slice(0, 120) || 'video';
+
+    // Jangan timpa file yang sudah ada
+    if (await r2KeyExists(`${R2_PREFIX}${base}.${ext}`)) {
+      base = `${base}-${Date.now().toString(36)}`;
+    }
+    const key      = `${R2_PREFIX}${base}.${ext}`;
+    const thumbKey = `${R2_PREFIX}${base}.jpg`;
+
+    const [videoUrl, thumbUrl] = await Promise.all([
+      getSignedUrl(r2, new PutObjectCommand({ Bucket: R2_BUCKET, Key: key,      ContentType: videoType }),    { expiresIn: 7200 }),
+      getSignedUrl(r2, new PutObjectCommand({ Bucket: R2_BUCKET, Key: thumbKey, ContentType: 'image/jpeg' }), { expiresIn: 7200 }),
+    ]);
+
+    console.log(`[UPLOAD] Admin menyiapkan upload: ${key} (${Math.round(size / 1024 / 1024)} MB)`);
+    res.json({ success: true, key, videoUrl, videoType, thumbUrl });
+  } catch (err) {
+    console.error('[UPLOAD] upload-url error:', err.name, err.message);
+    res.status(500).json({ success: false, message: 'Gagal menyiapkan upload ke R2' });
   }
 });
 
