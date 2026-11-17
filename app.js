@@ -3027,17 +3027,25 @@ window.addEventListener('pagehide', () => {
 
 
 // ================================================================
-// ADMIN: UPLOAD VIDEO (langsung ke R2) + THUMBNAIL OTOMATIS
-// Video dikirim dari browser admin langsung ke R2 lewat URL bertanda tangan,
-// jadi tidak membebani server. Thumbnail diambil dari satu frame video.
+// ADMIN: UPLOAD VIDEO (antrean maks. 10, langsung ke R2) + THUMBNAIL OTOMATIS
+// - Video dikirim dari browser admin langsung ke R2 lewat URL bertanda tangan.
+// - Diupload satu per satu agar hemat memori & koneksi HP.
+// - Jendela upload boleh ditutup: upload tetap jalan selama halaman tetap terbuka
+//   (progres tampil di tombol kecil di pojok layar).
+// - Layar dijaga tetap menyala selama upload (Wake Lock) bila browser mendukung.
 // ================================================================
 const UPLOAD_ALLOWED_EXT = ['mp4', 'm4v', 'webm', 'mov'];
 const UPLOAD_MAX_BYTES   = 4096 * 1024 * 1024; // samakan dengan MAX_UPLOAD_MB di server
-const _up = { file: null, thumbBlob: null, thumbUrl: null, busy: false, xhr: null };
+const UPLOAD_MAX_FILES   = 10;
+const _up = {
+  queue: [], running: false, cancelled: false, xhr: null, current: null,
+  runItems: [], wakeLock: null, nextId: 1, chipHold: false
+};
 
 function _upEl(id) { return document.getElementById(id); }
 function _upToken() { return authToken || getCookie('lb_token') || sessionStorage.getItem('lb_token') || ''; }
 function _upFmtSize(b) { return b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(1) + ' MB'; }
+function _upModalOpen() { const m = _upEl('upload-modal'); return !!(m && m.classList.contains('open')); }
 
 function _upStatus(msg, kind) {
   const el = _upEl('up-status');
@@ -3045,39 +3053,139 @@ function _upStatus(msg, kind) {
   el.textContent = msg || '';
   el.className = 'up-status' + (kind ? ' ' + kind : '');
 }
-function _upProgress(frac) {
-  const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
-  _upEl('up-progress').style.display = 'flex';
-  _upEl('up-bar-fill').style.width = pct + '%';
-  _upEl('up-pct').textContent = pct + '%';
+
+function _upChip(text) {
+  const c = _upEl('up-chip');
+  if (!c) return;
+  if (!text) { c.style.display = 'none'; return; }
+  c.textContent = text;
+  c.style.display = 'flex';
 }
 
-function resetUploadModal() {
-  if (_up.thumbUrl) { URL.revokeObjectURL(_up.thumbUrl); }
-  _up.file = null; _up.thumbBlob = null; _up.thumbUrl = null; _up.busy = false; _up.xhr = null;
-  const f = _upEl('up-file'); if (f) f.value = '';
-  _upEl('up-preview').style.display  = 'none';
-  _upEl('up-progress').style.display = 'none';
-  _upEl('up-bar-fill').style.width   = '0%';
-  _upEl('up-pct').textContent        = '0%';
-  _upEl('up-start').disabled         = true;
-  _upEl('up-pick').disabled          = false;
-  _upStatus('');
+function _upLabel(it) {
+  const size = _upFmtSize(it.file.size);
+  if (it.status === 'up')   return size + ' · Mengupload ' + Math.round(it.progress * 100) + '%';
+  if (it.status === 'done') return size + ' · Selesai ✓';
+  if (it.status === 'err')  return size + ' · ' + (it.error || 'Gagal') + ' — tekan Upload untuk coba lagi';
+  const th = it.thumbDone ? (it.thumbBlob ? ' · thumbnail siap' : ' · tanpa thumbnail') : ' · membuat thumbnail...';
+  return size + ' · Menunggu' + th;
+}
+
+// Progres keseluruhan (bar di modal + tombol kecil di pojok)
+function _upOverall() {
+  const items = _up.runItems;
+  const n = items.length;
+  if (_up.running && n) {
+    const finished = items.filter(i => i.status === 'done').length;
+    const cur  = _up.current ? _up.current.progress : 0;
+    const frac = Math.min(1, (finished + cur) / n);
+    const pct  = Math.round(frac * 100);
+    const fill = _upEl('up-bar-fill'); if (fill) fill.style.width = pct + '%';
+    const lbl  = _upEl('up-pct');      if (lbl)  lbl.textContent  = pct + '%';
+    if (!_upModalOpen()) _upChip('⬆ Upload ' + Math.min(finished + 1, n) + '/' + n + ' · ' + pct + '%');
+  } else if (!_up.chipHold) {
+    _upChip('');
+  }
+}
+
+function _upTick(it) {
+  if (it._sub)  it._sub.textContent = _upLabel(it);
+  if (it._fill) it._fill.style.width = Math.round(it.progress * 100) + '%';
+  _upOverall();
+}
+
+function _upRender() {
+  const list = _upEl('up-list');
+  if (list) {
+    list.textContent = '';
+    _up.queue.forEach(it => {
+      const row = document.createElement('div');
+      row.className = 'up-row ' + it.status;
+
+      const img = document.createElement('img');
+      img.alt = '';
+      if (it.thumbUrl) img.src = it.thumbUrl;
+
+      const meta = document.createElement('div');
+      meta.className = 'up-meta';
+      const name = document.createElement('div');
+      name.className = 'up-name';
+      name.textContent = it.file.name;
+      const sub = document.createElement('div');
+      sub.className = 'up-sub';
+      sub.textContent = _upLabel(it);
+      meta.appendChild(name);
+      meta.appendChild(sub);
+
+      let fill = null;
+      if (it.status === 'up') {
+        const bar = document.createElement('div');
+        bar.className = 'up-bar-sm';
+        fill = document.createElement('div');
+        fill.style.width = Math.round(it.progress * 100) + '%';
+        bar.appendChild(fill);
+        meta.appendChild(bar);
+      }
+      it._sub = sub; it._fill = fill;
+
+      row.appendChild(img);
+      row.appendChild(meta);
+      if (it.status !== 'up') {
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'up-rm';
+        x.textContent = '✕';
+        x.setAttribute('aria-label', 'Hapus dari antrean');
+        x.onclick = () => _upRemove(it.id);
+        row.appendChild(x);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  const pending = _up.queue.filter(i => i.status === 'wait' || i.status === 'err').length;
+  const start  = _upEl('up-start');
+  if (start) {
+    start.disabled    = _up.running || pending === 0;
+    start.textContent = pending ? 'Upload ' + pending + ' video' : 'Upload';
+  }
+  const cancel = _upEl('up-cancel');
+  if (cancel) cancel.style.display = _up.running ? 'block' : 'none';
+  const pick = _upEl('up-pick');
+  if (pick) {
+    pick.disabled    = _up.running || _up.queue.length >= UPLOAD_MAX_FILES;
+    pick.textContent = 'Pilih video (' + _up.queue.length + '/' + UPLOAD_MAX_FILES + ')…';
+  }
+  const prog = _upEl('up-progress');
+  if (prog) prog.style.display = _up.running ? 'flex' : 'none';
+  _upOverall();
+}
+
+function _upRevoke(it) { if (it.thumbUrl) { URL.revokeObjectURL(it.thumbUrl); it.thumbUrl = null; } }
+function _upClearQueue() { _up.queue.forEach(_upRevoke); _up.queue = []; _up.runItems = []; }
+function _upPruneDone()  { _up.queue = _up.queue.filter(i => { if (i.status === 'done') { _upRevoke(i); return false; } return true; }); }
+
+function _upRemove(id) {
+  const it = _up.queue.find(i => i.id === id);
+  if (!it || it.status === 'up') return;
+  _upRevoke(it);
+  _up.queue = _up.queue.filter(i => i.id !== id);
+  _upRender();
 }
 
 function openUploadModal() {
   if (!currentUser || currentUser.role !== 'admin') return;
-  resetUploadModal();
+  if (!_up.running) { _upPruneDone(); _upStatus(''); }
+  _upChip('');
   _upEl('upload-modal').classList.add('open');
+  _upRender();
 }
 
+// Menutup jendela TIDAK membatalkan upload yang sedang berjalan.
 function closeUploadModal() {
-  if (_up.busy) {
-    if (!confirm('Upload sedang berjalan. Batalkan?')) return;
-    try { _up.xhr && _up.xhr.abort(); } catch {}
-  }
   _upEl('upload-modal').classList.remove('open');
-  resetUploadModal();
+  if (!_up.running) { _upClearQueue(); _upStatus(''); }
+  _upRender();
 }
 
 // ── Ambil satu frame dari video sebagai thumbnail ───────────────
@@ -3147,42 +3255,59 @@ function _upCaptureThumbnail(file) {
   });
 }
 
-async function onUploadFileChosen(input) {
-  const file = input.files && input.files[0];
-  if (!file) return;
-  const ext = (file.name.split('.').pop() || '').toLowerCase();
-  if (!UPLOAD_ALLOWED_EXT.includes(ext)) {
-    _upStatus('Format tidak didukung. Pakai mp4, webm, mov, atau m4v.', 'err');
-    input.value = '';
-    return;
+// ── Thumbnail per item (dibuat sekali, dipakai untuk preview & upload) ──
+function _upEnsureThumb(it) {
+  if (!it.thumbPromise) {
+    it.thumbPromise = _upCaptureThumbnail(it.file).then(blob => {
+      it.thumbDone = true;
+      if (blob) { it.thumbBlob = blob; it.thumbUrl = URL.createObjectURL(blob); }
+      return blob;
+    }).catch(() => { it.thumbDone = true; return null; });
   }
-  if (file.size > UPLOAD_MAX_BYTES) {
-    _upStatus('File terlalu besar (maksimal ' + _upFmtSize(UPLOAD_MAX_BYTES) + ').', 'err');
-    input.value = '';
-    return;
+  return it.thumbPromise;
+}
+
+let _upThumbLoop = false;
+async function _upGenThumbs() {
+  if (_upThumbLoop) return;
+  _upThumbLoop = true;
+  try {
+    for (;;) {
+      const it = _up.queue.find(i => !i.thumbPromise);
+      if (!it) break;
+      await _upEnsureThumb(it);
+      _upRender();
+    }
+  } finally { _upThumbLoop = false; }
+}
+
+function onUploadFilesChosen(input) {
+  const files = Array.from(input.files || []);
+  input.value = '';
+  if (!files.length || _up.running) return;
+  _upPruneDone();
+
+  const problems = [];
+  let added = 0;
+  for (const f of files) {
+    if (_up.queue.length >= UPLOAD_MAX_FILES) {
+      problems.push('Maksimal ' + UPLOAD_MAX_FILES + ' video sekaligus, sisanya tidak ditambahkan.');
+      break;
+    }
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (!UPLOAD_ALLOWED_EXT.includes(ext)) { problems.push(f.name + ': format tidak didukung'); continue; }
+    if (f.size > UPLOAD_MAX_BYTES)        { problems.push(f.name + ': terlalu besar (maks. ' + _upFmtSize(UPLOAD_MAX_BYTES) + ')'); continue; }
+    if (_up.queue.some(i => i.file.name === f.name && i.file.size === f.size)) { problems.push(f.name + ': sudah ada di antrean'); continue; }
+    _up.queue.push({
+      id: _up.nextId++, file: f, status: 'wait', progress: 0, error: '',
+      thumbBlob: null, thumbUrl: null, thumbPromise: null, thumbDone: false
+    });
+    added++;
   }
 
-  _up.file = file; _up.thumbBlob = null;
-  if (_up.thumbUrl) { URL.revokeObjectURL(_up.thumbUrl); _up.thumbUrl = null; }
-  _upEl('up-name').textContent = file.name;
-  _upEl('up-size').textContent = _upFmtSize(file.size);
-  _upEl('up-thumb').removeAttribute('src');
-  _upEl('up-thumb-note').textContent = 'Membuat thumbnail...';
-  _upEl('up-preview').style.display = 'flex';
-  _upEl('up-start').disabled = true;
-  _upStatus('');
-
-  const blob = await _upCaptureThumbnail(file);
-  if (_up.file !== file) return; // file diganti selama proses
-  if (blob) {
-    _up.thumbBlob = blob;
-    _up.thumbUrl  = URL.createObjectURL(blob);
-    _upEl('up-thumb').src = _up.thumbUrl;
-    _upEl('up-thumb-note').textContent = 'Thumbnail otomatis siap';
-  } else {
-    _upEl('up-thumb-note').textContent = 'Thumbnail gagal dibuat (video tetap bisa diupload tanpa thumbnail)';
-  }
-  _upEl('up-start').disabled = false;
+  _upStatus(problems.length ? problems.join(' · ') : (added ? added + ' video ditambahkan.' : ''), problems.length ? 'err' : '');
+  _upRender();
+  _upGenThumbs();
 }
 
 // ── Kirim file ke R2 lewat URL bertanda tangan (dengan progres) ──
@@ -3196,58 +3321,112 @@ function _upPut(url, body, contentType, onProgress) {
     xhr.onload  = () => (xhr.status >= 200 && xhr.status < 300)
       ? resolve()
       : reject(new Error('R2 menolak upload (HTTP ' + xhr.status + ')'));
-    xhr.onerror = () => reject(new Error('Gagal terhubung ke R2. Cek pengaturan CORS bucket.'));
+    xhr.onerror = () => reject(new Error('Koneksi terputus / CORS bucket belum benar'));
     xhr.onabort = () => reject(new Error('Upload dibatalkan'));
     xhr.send(body);
   });
 }
 
-async function startUpload() {
-  if (!_up.file || _up.busy) return;
-  const file = _up.file;
-  _up.busy = true;
-  _upEl('up-start').disabled = true;
-  _upEl('up-pick').disabled  = true;
-  _upProgress(0);
+async function _upRunItem(it) {
+  const r = await fetch(API_BASE + '/api/admin/upload-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _upToken() },
+    body: JSON.stringify({ filename: it.file.name, size: it.file.size })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.success) throw new Error(data.message || 'Gagal menyiapkan upload');
 
+  await _upPut(data.videoUrl, it.file, data.videoType, (frac) => { it.progress = frac; _upTick(it); });
+
+  const blob = await _upEnsureThumb(it);
+  if (blob) {
+    try { await _upPut(data.thumbUrl, blob, 'image/jpeg'); }
+    catch (e) { console.warn('[UPLOAD] Thumbnail gagal diupload:', e.message); }
+  }
+}
+
+// ── Wake Lock: jaga layar tetap menyala selama upload ──
+async function _upAcquireWakeLock() {
   try {
-    _upStatus('Menyiapkan upload...');
-    const r = await fetch(`${API_BASE}/api/admin/upload-url`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${_upToken()}` },
-      body: JSON.stringify({ filename: file.name, size: file.size })
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.success) throw new Error(data.message || 'Gagal menyiapkan upload');
-
-    _upStatus('Mengupload video... jangan tutup halaman ini');
-    await _upPut(data.videoUrl, file, data.videoType, _upProgress);
-
-    if (_up.thumbBlob) {
-      _upStatus('Mengupload thumbnail...');
-      try { await _upPut(data.thumbUrl, _up.thumbBlob, 'image/jpeg'); }
-      catch (e) { console.warn('[UPLOAD] Thumbnail gagal diupload:', e.message); }
+    if ('wakeLock' in navigator && !_up.wakeLock) {
+      _up.wakeLock = await navigator.wakeLock.request('screen');
+      _up.wakeLock.addEventListener('release', () => { _up.wakeLock = null; });
     }
+  } catch {}
+}
+function _upReleaseWakeLock() {
+  try { if (_up.wakeLock) _up.wakeLock.release(); } catch {}
+  _up.wakeLock = null;
+}
+// Wake lock otomatis lepas saat tab disembunyikan → ambil lagi saat kembali
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _up.running) _upAcquireWakeLock();
+});
+function _upBeforeUnload(e) { e.preventDefault(); e.returnValue = ''; }
 
+async function startUpload() {
+  if (_up.running) return;
+  const todo = _up.queue.filter(i => i.status === 'wait' || i.status === 'err');
+  if (!todo.length) return;
+
+  todo.forEach(i => { i.status = 'wait'; i.error = ''; i.progress = 0; });
+  _up.runItems  = todo;
+  _up.running   = true;
+  _up.cancelled = false;
+  _upStatus('Mengupload... jangan tutup atau pindah dari halaman ini');
+  await _upAcquireWakeLock();
+  window.addEventListener('beforeunload', _upBeforeUnload);
+  _upRender();
+
+  let ok = 0, fail = 0;
+  for (const it of todo) {
+    if (_up.cancelled) break;
+    if (!_up.queue.includes(it)) continue; // dihapus dari antrean
+    it.status = 'up'; it.progress = 0; _up.current = it;
+    _upRender();
+    try {
+      await _upRunItem(it);
+      it.status = 'done'; it.progress = 1; ok++;
+      addAdminLog(currentUser.name, 'mengupload video: ' + it.file.name, '#10B981', 'system');
+    } catch (err) {
+      if (_up.cancelled) { it.status = 'wait'; it.progress = 0; }
+      else { it.status = 'err'; it.error = err.message || 'Gagal'; fail++; }
+    }
+    _up.current = null;
+    _upRender();
+  }
+
+  if (ok > 0) {
     _upStatus('Memperbarui daftar video...');
-    await fetch(`${API_BASE}/api/films/refresh`, {
+    await fetch(API_BASE + '/api/films/refresh', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${_upToken()}` }
+      headers: { 'Authorization': 'Bearer ' + _upToken() }
     }).catch(() => {});
     await loadFilmsFromAPI();
     renderFilmGrid();
-
-    _upProgress(1);
-    _upStatus('Selesai! Video sudah masuk daftar film.', 'ok');
-    addAdminLog(currentUser.name, 'mengupload video: ' + file.name, '#10B981', 'system');
-    _up.file = null;
-    _upEl('up-pick').disabled = false;
-  } catch (err) {
-    _upStatus(err.message || 'Upload gagal', 'err');
-    _upEl('up-start').disabled = false;
-    _upEl('up-pick').disabled  = false;
-  } finally {
-    _up.busy = false;
-    _up.xhr  = null;
   }
+
+  _up.running = false;
+  _upReleaseWakeLock();
+  window.removeEventListener('beforeunload', _upBeforeUnload);
+
+  let msg, kind;
+  if (_up.cancelled)  { msg = 'Upload dibatalkan.' + (ok ? ' ' + ok + ' video sempat selesai.' : ''); kind = 'err'; }
+  else if (fail)      { msg = ok + ' video berhasil, ' + fail + ' gagal. Tekan Upload untuk coba lagi yang gagal.'; kind = 'err'; }
+  else                { msg = 'Selesai! ' + ok + ' video sudah masuk daftar film.'; kind = 'ok'; }
+  _upStatus(msg, kind);
+
+  if (!_upModalOpen()) {           // jendela ditutup → kabari lewat tombol kecil
+    _up.chipHold = true;
+    _upChip((fail || _up.cancelled ? '⚠ ' : '✓ ') + msg);
+    setTimeout(() => { _up.chipHold = false; if (!_up.running) _upChip(''); }, 8000);
+  }
+  _upRender();
+}
+
+function cancelUpload() {
+  if (!_up.running) return;
+  if (!confirm('Batalkan semua upload yang sedang berjalan?')) return;
+  _up.cancelled = true;
+  try { if (_up.xhr) _up.xhr.abort(); } catch {}
 }

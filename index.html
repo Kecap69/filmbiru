@@ -26,7 +26,7 @@
   <meta name="twitter:description" content="Platform streaming dewasa terpercaya. Nonton film 18+ dengan kualitas HD kapan saja dan di mana saja."/>
   <meta name="twitter:image"       content="https://filmbiru.up.railway.app/background/priview.jpg"/>
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="/style.css?v=11"/>
+  <link rel="stylesheet" href="/style.css?v=12"/>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
@@ -499,7 +499,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <!-- ================================================================
-     MODAL UPLOAD VIDEO (Admin)
+     MODAL UPLOAD VIDEO (Admin) — antrean maks. 10 video
      ================================================================ -->
 <div class="upload-modal" id="upload-modal" role="dialog" aria-modal="true" aria-labelledby="up-title">
   <div class="up-card">
@@ -508,20 +508,13 @@ document.addEventListener('DOMContentLoaded', () => {
       <button type="button" class="up-x" onclick="closeUploadModal()" aria-label="Tutup">✕</button>
     </div>
 
-    <input type="file" id="up-file" hidden
+    <input type="file" id="up-file" hidden multiple
            accept=".mp4,.m4v,.webm,.mov,video/mp4,video/webm,video/quicktime"
-           onchange="onUploadFileChosen(this)"/>
-    <button type="button" class="up-pick" id="up-pick" onclick="document.getElementById('up-file').click()">Pilih video…</button>
-    <div class="up-hint">Format: mp4, webm, mov, m4v. Thumbnail dibuat otomatis dari isi video.</div>
+           onchange="onUploadFilesChosen(this)"/>
+    <button type="button" class="up-pick" id="up-pick" onclick="document.getElementById('up-file').click()">Pilih video (0/10)…</button>
+    <div class="up-hint">Maks. 10 video sekaligus (mp4, webm, mov, m4v). Thumbnail dibuat otomatis. Jendela ini boleh ditutup, upload tetap jalan selama halaman tidak ditutup.</div>
 
-    <div class="up-preview" id="up-preview" style="display:none;">
-      <img id="up-thumb" alt="Thumbnail"/>
-      <div class="up-meta">
-        <div class="up-name" id="up-name"></div>
-        <div class="up-size" id="up-size"></div>
-        <div class="up-note" id="up-thumb-note"></div>
-      </div>
-    </div>
+    <div class="up-list" id="up-list"></div>
 
     <div class="up-progress" id="up-progress" style="display:none;">
       <div class="up-bar"><div id="up-bar-fill"></div></div>
@@ -529,12 +522,18 @@ document.addEventListener('DOMContentLoaded', () => {
     </div>
     <div class="up-status" id="up-status"></div>
 
-    <button type="button" class="up-start" id="up-start" onclick="startUpload()" disabled>Upload</button>
+    <div class="up-actions">
+      <button type="button" class="up-cancel" id="up-cancel" onclick="cancelUpload()" style="display:none;">Batalkan</button>
+      <button type="button" class="up-start" id="up-start" onclick="startUpload()" disabled>Upload</button>
+    </div>
   </div>
 </div>
 
+<!-- Tombol kecil progres upload (muncul saat jendela upload ditutup) -->
+<button type="button" class="up-chip" id="up-chip" onclick="openUploadModal()" style="display:none;"></button>
+
 <script src="/offline.js?v=1"></script>
-<script src="/app.js?v=21"></script>
+<script src="/app.js?v=22"></script>
 
 <script>
 /* ── Login Cover Slideshow ─────────────────────────────────────
