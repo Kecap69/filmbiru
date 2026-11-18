@@ -3285,6 +3285,10 @@ function _upDrawFrame(v) {
   });
 }
 
+// Versi blur+gelap dari frame yang sama — dipakai sebagai sampul slideshow di
+// halaman login. Sengaja dibuat sangat buram (downscale ekstrem + blur) supaya
+// detail/isi video tidak terlihat oleh orang yang belum login/verifikasi usia;
+// yang tersisa cuma kesan warna & suasana, bukan gambar yang bisa dikenali.
 function _upCaptureThumbnail(file) {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);

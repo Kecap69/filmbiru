@@ -131,6 +131,7 @@ async function fetchFilms() {
       return null;
     };
 
+
     // Terbaru di atas
     const videos = objs
       .filter(o => VIDEO_EXT_REGEX.test(o.Key))
@@ -145,16 +146,17 @@ async function fetchFilms() {
       const ext      = o.Key.split('.').pop().toLowerCase();
       const thumbKey = findThumbKey(o.Key);
       return {
-        id:       index + 1,
-        fileId:   o.Key,            // key objek R2 dipakai sebagai ID
-        title:    o.Key.split('/').pop().replace(/\.[^/.]+$/, ''),
-        desc:     'Cloudflare R2',
-        videoId:  o.Key,
-        thumb:    thumbKey ? `/api/proxy-thumb?id=${encodeURIComponent(thumbKey)}` : '',
-        mimeType: VIDEO_MIME[ext] || 'video/mp4',
-        gradient: GRADIENTS_POOL[index % GRADIENTS_POOL.length],
-        duration: '—',
-        source:   'r2'
+        id:          index + 1,
+        fileId:      o.Key,            // key objek R2 dipakai sebagai ID
+        title:       o.Key.split('/').pop().replace(/\.[^/.]+$/, ''),
+        desc:        'Cloudflare R2',
+        videoId:     o.Key,
+        thumb:       thumbKey ? `/api/proxy-thumb?id=${encodeURIComponent(thumbKey)}` : '',
+        thumbKeyRaw: thumbKey || null, // dipakai /api/public-covers (tanpa auth) — lihat catatan di sana
+        mimeType:    VIDEO_MIME[ext] || 'video/mp4',
+        gradient:    GRADIENTS_POOL[index % GRADIENTS_POOL.length],
+        duration:    '—',
+        source:      'r2'
       };
     });
 
@@ -659,7 +661,42 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Daftar gambar folder /background untuk slideshow login
+// ================================================================
+// SAMPUL LOGIN DARI THUMBNAIL VIDEO (R2) — tanpa login
+// CATATAN: thumbnail asli (tajam) ditampilkan apa adanya di halaman login,
+// sebelum pengguna login/verifikasi usia. Ini atas permintaan eksplisit —
+// pertimbangkan kembali kalau isi video bersifat sensitif/18+.
+// ================================================================
+app.get('/api/public-covers', async (req, res) => {
+  try {
+    const films  = await fetchFilms();
+    const images = films.filter(f => f.thumbKeyRaw).map(f => `/api/public-thumb?id=${encodeURIComponent(f.thumbKeyRaw)}`);
+    res.json({ success: true, images });
+  } catch (e) {
+    console.error('[BG] Gagal ambil daftar sampul:', e.message);
+    res.json({ success: true, images: [] });
+  }
+});
+
+app.get('/api/public-thumb', async (req, res) => {
+  const key = req.query.id;
+  if (!key || typeof key !== 'string' || !IMG_EXT_REGEX.test(key) || (R2_PREFIX && !key.startsWith(R2_PREFIX))) {
+    return res.status(403).end();
+  }
+  try {
+    const out = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    res.setHeader('Content-Type',  'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    if (out.ContentLength != null) res.setHeader('Content-Length', out.ContentLength);
+    out.Body.on('error', () => res.destroy());
+    req.on('close', () => out.Body.destroy());
+    out.Body.pipe(res);
+  } catch (err) {
+    if (!res.headersSent) res.status(404).end();
+  }
+});
+
+// Daftar gambar folder /background untuk slideshow login (fallback jika belum ada sampul dari video)
 app.get('/api/backgrounds', (req, res) => {
   try {
     const bgDir = path.join(__dirname, 'background');
@@ -1098,7 +1135,6 @@ app.post('/api/admin/upload-url', async (req, res) => {
     }
     const key      = `${R2_PREFIX}${base}.${ext}`;
     const thumbKey = `${R2_PREFIX}${base}.jpg`;
-
     const [videoUrl, thumbUrl] = await Promise.all([
       getSignedUrl(r2, new PutObjectCommand({ Bucket: R2_BUCKET, Key: key,      ContentType: videoType }),    { expiresIn: 7200 }),
       getSignedUrl(r2, new PutObjectCommand({ Bucket: R2_BUCKET, Key: thumbKey, ContentType: 'image/jpeg' }), { expiresIn: 7200 }),
