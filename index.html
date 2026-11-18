@@ -554,13 +554,28 @@ document.addEventListener('DOMContentLoaded', () => {
     return arr;
   }
 
+  // Sampul diutamakan dari thumbnail video (blur, dibuat otomatis saat upload).
+  // Kalau belum ada satupun (misal belum ada video diupload), fallback ke folder /background lama.
+  async function fetchCoverImages() {
+    try {
+      const r1 = await fetch('/api/public-covers');
+      const d1 = await r1.json();
+      if (d1.images && d1.images.length > 0) return d1.images;
+    } catch (e) { /* lanjut ke fallback */ }
+    try {
+      const r2 = await fetch('/api/backgrounds');
+      const d2 = await r2.json();
+      if (d2.images && d2.images.length > 0) return d2.images;
+    } catch (e) { /* gagal diam-diam, pakai gradient polos */ }
+    return [];
+  }
+
   async function initCoverSlideshow() {
     try {
-      const res  = await fetch('/api/backgrounds');
-      const data = await res.json();
-      if (!data.images || data.images.length === 0) return;
+      const sourceImages = await fetchCoverImages();
+      if (sourceImages.length === 0) return;
 
-      const images = shuffleArray([...data.images]); // acak urutan tiap kali halaman dimuat
+      const images = shuffleArray([...sourceImages]); // acak urutan tiap kali halaman dimuat
       const cover  = document.querySelector('.card-cover');
       if (!cover) return;
 
