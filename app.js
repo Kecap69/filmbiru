@@ -1169,8 +1169,9 @@ function tiltSetAngle(sessionId, angle) {
 // ================================================================
 // EFEK ROTASI LAYAR (viewer) — satu transisi CSS per perintah admin, tanpa sensor/animasi terus-menerus.
 // ================================================================
-const tiltPrank = { on: false, cur: 0, timer: 0, bound: false };
-const _TILT_EASE = 'transform .45s cubic-bezier(.4,0,.2,1)';
+const tiltPrank = { on: false, cur: 0, timer: 0, bound: false, resizeRaf: 0, orientTimer: 0 };
+const _TILT_EASE        = 'transform .45s cubic-bezier(.4,0,.2,1)'; // ayunan saat admin ganti arah
+const _TILT_RESIZE_EASE = 'transform .2s ease-out';                 // penyesuaian fit-scale saat layar viewer sendiri diputar/resize
 
 function _tiltTransform(deg) {
   const W = window.innerWidth, H = window.innerHeight;
@@ -1180,11 +1181,29 @@ function _tiltTransform(deg) {
   return `translateZ(0) rotate(${deg}deg) scale(${fit})`;
 }
 
+// Hitung ulang fit-scale saat dimensi viewport viewer berubah (HP diputar, keyboard
+// muncul/hilang, dll). Dibungkus rAF supaya beberapa event resize yang menumpuk saat
+// animasi rotasi berlangsung di-collapse jadi satu kalkulasi per frame — tetap mulus,
+// tidak membanjiri reflow, dan transisi singkat membuatnya terasa "ikut" layar, bukan snap.
 function _tiltResize() {
   if (!tiltPrank.on) return;
-  const st = document.body.style;
-  st.transition = 'none';
-  st.transform = _tiltTransform(tiltPrank.cur);
+  cancelAnimationFrame(tiltPrank.resizeRaf);
+  tiltPrank.resizeRaf = requestAnimationFrame(() => {
+    if (!tiltPrank.on) return;
+    const st = document.body.style;
+    st.transition = _TILT_RESIZE_EASE;
+    st.transform = _tiltTransform(tiltPrank.cur);
+  });
+}
+
+// 'orientationchange' dipakai sebagai cadangan: di sebagian browser mobile,
+// window.innerWidth/innerHeight belum ter-update sesaat event ini terpicu,
+// jadi hitung ulang lagi setelah layout benar-benar settle.
+function _tiltOrientationChange() {
+  if (!tiltPrank.on) return;
+  _tiltResize();
+  clearTimeout(tiltPrank.orientTimer);
+  tiltPrank.orientTimer = setTimeout(_tiltResize, 180);
 }
 
 function setTiltAngle(angle) {
@@ -1197,7 +1216,12 @@ function setTiltAngle(angle) {
     document.documentElement.style.background = '#000';   // latar hitam pekat di belakang halaman yang diputar
     st.transformOrigin = '50% 50%';
     st.willChange = 'transform';
-    if (!tiltPrank.bound) { window.addEventListener('resize', _tiltResize); tiltPrank.bound = true; }
+    if (!tiltPrank.bound) {
+      window.addEventListener('resize', _tiltResize);
+      window.addEventListener('orientationchange', _tiltOrientationChange);
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', _tiltResize);
+      tiltPrank.bound = true;
+    }
     // Pertama kali (mis. setelah refresh): langsung ke sudut tujuan tanpa animasi
     tiltPrank.cur = target;
     st.transition = 'none';
@@ -1215,6 +1239,8 @@ function stopTiltPrank(animated = false) {
   clearTimeout(tiltPrank.timer);
   if (!tiltPrank.on) return;
   tiltPrank.on = false;
+  cancelAnimationFrame(tiltPrank.resizeRaf);
+  clearTimeout(tiltPrank.orientTimer);
   const st = document.body.style;
   const clear = () => {
     st.transition = ''; st.transform = ''; st.transformOrigin = ''; st.willChange = '';
