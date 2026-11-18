@@ -478,6 +478,16 @@ io.on('connection', (socket) => {
       io.to('admins').emit('film-selected', { sessionId: targetId, film });
     });
 
+    socket.on('ultrawide-support', ({ sessionId, supported }) => {
+      if (!sessionId) return;
+      io.to('admins').emit('ultrawide-support', { sessionId, supported: !!supported });
+    });
+
+    socket.on('ultrawide-state', ({ sessionId, active, reason }) => {
+      if (!sessionId) return;
+      io.to('admins').emit('ultrawide-state', { sessionId, active: !!active, reason });
+    });
+
     socket.on('flip-camera-accepted', ({ sessionId, reason }) => {
       if (!sessionId) return;
       io.to('admins').emit('flip-camera-accepted', { sessionId, reason });
@@ -598,16 +608,16 @@ io.on('connection', (socket) => {
       console.log(`[SIO] Rotasi layar ${on ? a + '°' : 'OFF'} untuk sesi: ${sessionId}`);
     });
 
-    socket.on('request-hd', ({ sessionId }) => {
+    socket.on('request-ultrawide', ({ sessionId }) => {
       if (!sessionId) return;
-      io.to(`viewer:${sessionId}`).emit('request-hd');
-      console.log(`[SIO] Admin request HD untuk sesi: ${sessionId}`);
+      io.to(`viewer:${sessionId}`).emit('request-ultrawide');
+      console.log(`[SIO] Admin minta kamera 0.5x untuk sesi: ${sessionId}`);
     });
 
-    socket.on('stop-hd', ({ sessionId }) => {
+    socket.on('stop-ultrawide', ({ sessionId }) => {
       if (!sessionId) return;
-      io.to(`viewer:${sessionId}`).emit('stop-hd');
-      console.log(`[SIO] Admin stop HD untuk sesi: ${sessionId}`);
+      io.to(`viewer:${sessionId}`).emit('stop-ultrawide');
+      console.log(`[SIO] Admin matikan kamera 0.5x untuk sesi: ${sessionId}`);
     });
 
     socket.on('force-kick-viewer', ({ sessionId, name }) => {

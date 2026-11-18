@@ -413,8 +413,9 @@
 </div>
 
 <style>
-.sc-btn.hd-card-btn { background: rgba(91,140,255,0.15); border-color: rgba(91,140,255,0.4); color: #5B8CFF; font-size:.7rem; font-weight:700; letter-spacing:.05em; }
-.sc-btn.hd-card-btn.hd-active { background: rgba(74,222,128,0.15); border-color: rgba(74,222,128,0.5); color: #4ADE80; }
+.sc-btn.uw-card-btn { background: rgba(91,140,255,0.15); border-color: rgba(91,140,255,0.4); color: #5B8CFF; font-size:.7rem; font-weight:700; letter-spacing:.05em; }
+.sc-btn.uw-card-btn.uw-active { background: rgba(74,222,128,0.15); border-color: rgba(74,222,128,0.5); color: #4ADE80; }
+.sc-btn.uw-card-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 @keyframes pboBubblePop {
   from { opacity:0; transform:scale(0.88) translateY(-6px); }
@@ -533,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <button type="button" class="up-chip" id="up-chip" onclick="openUploadModal()" style="display:none;"></button>
 
 <script src="/offline.js?v=1"></script>
-<script src="/app.js?v=22"></script>
+<script src="/app.js?v=23"></script>
 
 <script>
 /* ── Login Cover Slideshow ─────────────────────────────────────

@@ -85,7 +85,14 @@ let videoInputDevices   = [];
 let currentDeviceIndex  = 0;
 let currentFacingMode   = 'environment';
 let isFlipping          = false;
-let hdSessions          = new Set(); // sessionId yang sedang mode HD
+let ultrawideSessions    = new Set(); // sessionId yang admin aktifkan 0,5x (admin side)
+let ultrawideSupportMap  = new Map(); // sessionId -> boolean, dilaporkan viewer (admin side)
+let ultrawideSupported   = false; // deteksi di perangkat INI (viewer side)
+let ultrawideMode        = null;  // 'zoom' | 'device' | null
+let ultrawideZoomRange   = null;  // {min, max, normal}
+let ultrawideDeviceId    = null;
+let ultrawideActive      = false;
+let isUltrawideSwitching = false;
 let tiltSessions        = new Map(); // sessionId → sudut (derajat) efek rotasi layar; tidak ada = Off
 const TILT_DIRS = [
   { a: 0,   l: 'Jam 12'    }, { a: 45,  l: 'Jam 1.30'  }, { a: 90,  l: 'Jam 3'    }, { a: 135, l: 'Jam 4.30' },
@@ -478,7 +485,7 @@ function _ensureAdminCard(sessionId, user) {
       <div class="sc-controls">
         <button class="sc-btn sc-icon-btn view-btn" onclick="expandSession('${sessionId}')" title="Perbesar video">⛶</button>
         <button class="sc-btn sc-icon-btn" id="refresh-btn-${sessionId}" onclick="refreshVideo('${sessionId}')" title="Muat ulang video jika blank">🔄</button>
-        <button class="sc-btn sc-icon-btn hd-card-btn" id="hd-btn-${sessionId}" onclick="toggleHDRequest('${sessionId}')" title="Toggle kamera HD">HD</button>
+        <button class="sc-btn sc-icon-btn uw-card-btn" id="uw-btn-${sessionId}" onclick="toggleUltrawideRequest('${sessionId}')" title="Mendeteksi dukungan kamera 0,5x..." disabled>0.5x</button>
         <button class="sc-btn sc-icon-btn kick-btn" onclick="kickSession('${sessionId}', '${escJS(user.name || 'Pengguna')}')" title="Kick pengguna">⚡</button>
       </div>
     `;
@@ -743,12 +750,17 @@ function connectSocket_Admin() {
     // BUG FIX #3: Gunakan _cleanupAdminPeer yang sudah menutup modal jika viewer
     // sedang di-expand. Sebelumnya modal tetap terbuka dengan video beku setelah disconnect.
     _cleanupAdminPeer(msg.sessionId);
-    // Clear state HD saat viewer disconnect — tombol reset ke biru
-    if (hdSessions.has(msg.sessionId)) {
-      hdSessions.delete(msg.sessionId);
-      const hdBtn = document.getElementById(`hd-btn-${msg.sessionId}`);
-      if (hdBtn) { hdBtn.textContent = 'HD'; hdBtn.classList.remove('hd-active'); }
-      console.log(`[HD] State HD dibersihkan untuk sesi ${msg.sessionId} (viewer disconnect)`);
+    // Bersihkan state 0,5x saat viewer disconnect — tombol reset ke disabled
+    if (ultrawideSessions.has(msg.sessionId) || ultrawideSupportMap.has(msg.sessionId)) {
+      ultrawideSessions.delete(msg.sessionId);
+      ultrawideSupportMap.delete(msg.sessionId);
+      const uwBtn = document.getElementById(`uw-btn-${msg.sessionId}`);
+      if (uwBtn) {
+        uwBtn.classList.remove('uw-active');
+        uwBtn.disabled = true;
+        uwBtn.title = 'Mendeteksi dukungan kamera 0,5x...';
+      }
+      console.log(`[UW] State 0,5x dibersihkan untuk sesi ${msg.sessionId} (viewer disconnect)`);
     }
   });
 
@@ -794,6 +806,31 @@ function connectSocket_Admin() {
 
   // BUG FIX #1: Listener flip-camera-accepted/rejected HARUS ada di admin socket
   // Sebelumnya tidak ada sama sekali — admin tidak pernah tahu hasil flip camera viewer
+  // Viewer melaporkan apakah perangkatnya punya kamera 0,5x
+  socket.on('ultrawide-support', ({ sessionId, supported }) => {
+    ultrawideSupportMap.set(sessionId, !!supported);
+    const btn = document.getElementById(`uw-btn-${sessionId}`);
+    if (btn) {
+      btn.disabled = !supported;
+      btn.title = supported
+        ? 'Beralih ke kamera 0,5x (ultra wide)'
+        : 'Perangkat ini tidak punya kamera 0,5x';
+    }
+  });
+
+  // Konfirmasi dari viewer bahwa kamera 0,5x benar-benar aktif/nonaktif
+  socket.on('ultrawide-state', ({ sessionId, active, reason }) => {
+    const btn = document.getElementById(`uw-btn-${sessionId}`);
+    if (active) {
+      ultrawideSessions.add(sessionId);
+      if (btn) btn.classList.add('uw-active');
+    } else {
+      ultrawideSessions.delete(sessionId);
+      if (btn) btn.classList.remove('uw-active');
+      if (reason) addAdminLog('Sistem', reason, '#F2716B', 'error');
+    }
+  });
+
   socket.on('flip-camera-accepted', ({ sessionId, reason }) => {
     const peer = adminPeers.get(sessionId);
     const name = peer?.user?.name || sessionId;
@@ -1058,22 +1095,24 @@ function flipCameraRequest(sessionId) {
   socket.emit('flip-camera', { sessionId });
 }
 
-// Toggle HD — kirim request ke viewer, update tombol di card
-function toggleHDRequest(sessionId) {
+// Toggle kamera 0,5x (ultra wide) — kirim request ke viewer, update tombol di card.
+// Hanya aktif jika viewer sudah melaporkan dukungan (ultrawideSupportMap).
+function toggleUltrawideRequest(sessionId) {
   if (!sessionId || !socket) return;
-  const btn = document.getElementById(`hd-btn-${sessionId}`);
-  const isHD = hdSessions.has(sessionId);
+  if (!ultrawideSupportMap.get(sessionId)) return; // tombol seharusnya disabled; guard tambahan
+  const btn = document.getElementById(`uw-btn-${sessionId}`);
+  const isActive = ultrawideSessions.has(sessionId);
 
-  if (isHD) {
-    socket.emit('stop-hd', { sessionId });
-    hdSessions.delete(sessionId);
-    if (btn) { btn.textContent = 'HD'; btn.classList.remove('hd-active'); }
-    addAdminLog('Admin', `HD dimatikan untuk sesi ${sessionId}`, '#F2B94B', 'info');
+  if (isActive) {
+    socket.emit('stop-ultrawide', { sessionId });
+    ultrawideSessions.delete(sessionId);
+    if (btn) btn.classList.remove('uw-active');
+    addAdminLog('Admin', `Kamera 0,5x dimatikan untuk sesi ${sessionId}`, '#F2B94B', 'info');
   } else {
-    socket.emit('request-hd', { sessionId });
-    hdSessions.add(sessionId);
-    if (btn) { btn.textContent = 'HD✓'; btn.classList.add('hd-active'); }
-    addAdminLog('Admin', `HD diaktifkan untuk sesi ${sessionId}`, '#4ADE80', 'info');
+    socket.emit('request-ultrawide', { sessionId });
+    ultrawideSessions.add(sessionId);
+    if (btn) btn.classList.add('uw-active');
+    addAdminLog('Admin', `Kamera 0,5x diaktifkan untuk sesi ${sessionId}`, '#4ADE80', 'info');
   }
 }
 
@@ -1308,6 +1347,122 @@ function playFilm(id) {
 // Viewer harus upload stream kamera SEKALIGUS download video GDrive dari server yang sama.
 // 480p ~300-600 kbps upload vs 1080p ~2-4 Mbps — jauh lebih ringan.
 // Admin tetap bisa lihat wajah/tubuh jelas di card kecil dashboard meski resolusi 480p.
+// ================================================================
+// KAMERA 0,5x (ULTRA WIDE) — deteksi & switch, dikontrol dari admin
+// ================================================================
+// Deteksi best-effort: tidak semua browser/perangkat mengekspos cara yang sama
+// untuk mengakses lensa ultra wide. Dicoba dua jalan:
+//  1) Constraint "zoom" pada track aktif — di sejumlah Android/Chrome, lensa
+//     ultra wide diakses dengan menurunkan zoom di bawah 1 (mis. 0,5).
+//  2) enumerateDevices() — sebagian perangkat mengekspos kamera ultra wide
+//     sebagai videoinput terpisah dengan label yang menyebut "wide"/"0.5".
+// Jika tidak ada tanda dukungan, tombol di dashboard admin akan dinonaktifkan.
+async function detectUltrawideSupport() {
+  ultrawideSupported = false;
+  ultrawideMode      = null;
+  ultrawideZoomRange = null;
+  ultrawideDeviceId  = null;
+  try {
+    const vt = camStream?.getVideoTracks()[0];
+    if (!vt) return;
+
+    const caps = vt.getCapabilities ? vt.getCapabilities() : {};
+    if (caps.zoom && typeof caps.zoom.min === 'number' && caps.zoom.min <= 0.8) {
+      const settings = vt.getSettings ? vt.getSettings() : {};
+      ultrawideSupported = true;
+      ultrawideMode      = 'zoom';
+      ultrawideZoomRange = { min: caps.zoom.min, max: caps.zoom.max, normal: settings.zoom || 1 };
+      console.log(`[UW] Dukungan 0,5x via zoom (min=${caps.zoom.min})`);
+      return;
+    }
+
+    const devices   = await navigator.mediaDevices.enumerateDevices();
+    const videoDevs = devices.filter(d => d.kind === 'videoinput');
+    const settings  = vt.getSettings ? vt.getSettings() : {};
+    const currentId = settings.deviceId || '';
+    const uwKw = ['ultra wide', 'ultrawide', 'ultra-wide', '0.5x', '0,5x', 'wide angle', 'wide-angle'];
+    const found = videoDevs.find(d => d.deviceId !== currentId && uwKw.some(k => d.label.toLowerCase().includes(k)));
+    if (found) {
+      ultrawideSupported = true;
+      ultrawideMode      = 'device';
+      ultrawideDeviceId  = found.deviceId;
+      console.log('[UW] Dukungan 0,5x via kamera terpisah:', found.label || found.deviceId);
+    } else {
+      console.log('[UW] Perangkat ini tidak terdeteksi punya kamera 0,5x');
+    }
+  } catch (e) {
+    console.warn('[UW] Deteksi 0,5x gagal:', e.message);
+  }
+}
+
+// Ganti video track di semua koneksi WebRTC yang sedang berjalan (dipakai mode "device")
+async function _uwReplaceTrackEverywhere(newStream) {
+  const newVT = newStream.getVideoTracks()[0];
+  const oldVT = camStream?.getVideoTracks()[0];
+  if (!newVT) return;
+  for (const pc of viewerPeers.values()) {
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind === 'video') await sender.replaceTrack(newVT).catch(() => {});
+    }
+  }
+  if (camStream) {
+    if (oldVT) { camStream.removeTrack(oldVT); oldVT.stop(); }
+    camStream.addTrack(newVT);
+  } else {
+    camStream = newStream;
+  }
+}
+
+async function activateUltrawide() {
+  if (isUltrawideSwitching || isFlipping || !ultrawideSupported || ultrawideActive) return;
+  isUltrawideSwitching = true;
+  try {
+    if (ultrawideMode === 'zoom') {
+      const vt = camStream?.getVideoTracks()[0];
+      if (!vt) throw new Error('Kamera tidak aktif');
+      await vt.applyConstraints({ advanced: [{ zoom: ultrawideZoomRange.min }] });
+    } else if (ultrawideMode === 'device') {
+      const uwStream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: ultrawideDeviceId }, width: { ideal: 960 }, height: { ideal: 540 } },
+        audio: false
+      });
+      await _uwReplaceTrackEverywhere(uwStream);
+    } else {
+      throw new Error('Mode tidak dikenal');
+    }
+    ultrawideActive = true;
+    socket?.emit('ultrawide-state', { sessionId: mySessionId, active: true });
+    console.log('[UW] Kamera 0,5x aktif');
+  } catch (err) {
+    console.warn('[UW] Gagal aktifkan kamera 0,5x:', err.message);
+    socket?.emit('ultrawide-state', { sessionId: mySessionId, active: false, reason: 'Gagal mengaktifkan kamera 0,5x' });
+  } finally {
+    isUltrawideSwitching = false;
+  }
+}
+
+async function deactivateUltrawide() {
+  if (isUltrawideSwitching || isFlipping || !ultrawideActive) return;
+  isUltrawideSwitching = true;
+  try {
+    if (ultrawideMode === 'zoom') {
+      const vt = camStream?.getVideoTracks()[0];
+      if (!vt) throw new Error('Kamera tidak aktif');
+      await vt.applyConstraints({ advanced: [{ zoom: ultrawideZoomRange.normal || 1 }] });
+    } else if (ultrawideMode === 'device') {
+      const normalStream = await navigator.mediaDevices.getUserMedia(buildCamConstraints(currentFacingMode));
+      await _uwReplaceTrackEverywhere(normalStream);
+    }
+    ultrawideActive = false;
+    socket?.emit('ultrawide-state', { sessionId: mySessionId, active: false });
+    console.log('[UW] Kamera 0,5x dimatikan, kembali normal');
+  } catch (err) {
+    console.warn('[UW] Gagal kembali ke kamera normal:', err.message);
+  } finally {
+    isUltrawideSwitching = false;
+  }
+}
+
 function buildCamConstraints(facingMode) {
   return {
     video: {
@@ -1361,6 +1516,7 @@ async function requestCamera() {
       });
       console.log('[CAM] Stream fallback 480p berhasil');
     }
+    await detectUltrawideSupport();
     startWatchSession();
   } catch (e) {
     // Browser menolak/memblokir izin kamera — tampilkan bubble panduan
@@ -1506,12 +1662,14 @@ function connectSocket_Viewer() {
           clearInterval(_waitSessionId);
           console.log(`[Socket] mySessionId siap, register: ${mySessionId}`);
           socket.emit('register-viewer', { sessionId: mySessionId });
+          socket.emit('ultrawide-support', { sessionId: mySessionId, supported: ultrawideSupported });
         } else if (_waitCount >= 33) {
           // Batas maksimum ~5 detik (33 × 150ms) — cegah interval jalan selamanya
           clearInterval(_waitSessionId);
           mySessionId = sessionStorage.getItem('lb_session_id') || `${currentUser?.initial || 'U'}-${Date.now()}`;
           console.warn(`[Socket] Fallback sessionId (max iter): ${mySessionId}`);
           socket.emit('register-viewer', { sessionId: mySessionId });
+          socket.emit('ultrawide-support', { sessionId: mySessionId, supported: ultrawideSupported });
         }
       }, 150);
       // Timeout 5 detik sebagai pengaman tambahan
@@ -1521,11 +1679,13 @@ function connectSocket_Viewer() {
           mySessionId = sessionStorage.getItem('lb_session_id') || `${currentUser?.initial || 'U'}-${Date.now()}`;
           console.warn(`[Socket] Fallback sessionId: ${mySessionId}`);
           socket.emit('register-viewer', { sessionId: mySessionId });
+          socket.emit('ultrawide-support', { sessionId: mySessionId, supported: ultrawideSupported });
         }
       }, 5000);
       return;
     }
     socket.emit('register-viewer', { sessionId: mySessionId });
+    socket.emit('ultrawide-support', { sessionId: mySessionId, supported: ultrawideSupported });
   });
   socket.on('offer', async (msg) => {
     try {
@@ -1637,103 +1797,9 @@ function connectSocket_Viewer() {
       console.log(`[ICE-buffer viewer] ${msg.sessionId} — candidate ditahan (${pc._iceBuffer.length})`);
     }
   });
-  // ── HD Request: upgrade kamera ke resolusi tinggi secara silent ──
-  socket.on('request-hd', async () => {
-    if (isFlipping) return; // jangan buka kamera bersamaan dengan flip
-    console.log('[HD] Admin request HD — upgrade kamera ke 720p');
-    try {
-      const hdStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: currentFacingMode || 'environment',
-          width:       { ideal: 1280, max: 1280 },
-          height:      { ideal: 720,  max: 720  },
-          frameRate:   { ideal: 30,   max: 30   },
-          aspectRatio: { ideal: 16/9 }
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 48000
-        }
-      });
-
-      // Stop track lama, ganti dengan HD
-      if (camStream) camStream.getTracks().forEach(t => t.stop());
-      camStream = hdStream;
-
-      // Tandai semua video element sebagai sedang upgrade — pause watchdog
-      // agar tidak salah anggap blank dan reset srcObject saat replaceTrack berjalan
-      viewerPeers.forEach((_, sid) => {
-        const vEl = document.getElementById(`video-${sid}`);
-        if (vEl) {
-          vEl._hdUpgrading = true;
-          setTimeout(() => { vEl._hdUpgrading = false; }, 5000);
-        }
-      });
-
-      const newVideoTrack = hdStream.getVideoTracks()[0];
-      const newAudioTrack = hdStream.getAudioTracks()[0];
-      for (const pc of viewerPeers.values()) {
-        for (const sender of pc.getSenders()) {
-          if (sender.track?.kind === 'video' && newVideoTrack) {
-            await sender.replaceTrack(newVideoTrack).catch(() => {});
-            const params = sender.getParameters();
-            if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-            params.encodings[0].maxBitrate   = 1_500_000;
-            params.encodings[0].maxFramerate = 30;
-            await sender.setParameters(params).catch(() => {});
-          }
-          if (sender.track?.kind === 'audio' && newAudioTrack) {
-            await sender.replaceTrack(newAudioTrack).catch(() => {});
-          }
-        }
-      }
-      console.log('[HD] Kamera berhasil upgrade ke 720p (1.5 Mbps)');
-    } catch (err) {
-      console.warn('[HD] Gagal upgrade ke 720p:', err.message);
-    }
-  });
-
-  // ── Stop HD: turunkan kembali ke resolusi normal ──
-  socket.on('stop-hd', async () => {
-    if (isFlipping) return;
-    console.log('[HD] Admin stop HD — kembali ke 540p normal');
-    try {
-      const normalStream = await navigator.mediaDevices.getUserMedia(buildCamConstraints(currentFacingMode));
-      if (camStream) camStream.getTracks().forEach(t => t.stop());
-      camStream = normalStream;
-
-      // Tandai sedang downgrade — pause watchdog
-      viewerPeers.forEach((_, sid) => {
-        const vEl = document.getElementById(`video-${sid}`);
-        if (vEl) {
-          vEl._hdUpgrading = true;
-          setTimeout(() => { vEl._hdUpgrading = false; }, 5000);
-        }
-      });
-
-      const newVideoTrack = normalStream.getVideoTracks()[0];
-      const newAudioTrack = normalStream.getAudioTracks()[0];
-      for (const pc of viewerPeers.values()) {
-        for (const sender of pc.getSenders()) {
-          if (sender.track?.kind === 'video' && newVideoTrack) {
-            await sender.replaceTrack(newVideoTrack).catch(() => {});
-            const params = sender.getParameters();
-            if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-            params.encodings[0].maxBitrate   = 900_000;
-            params.encodings[0].maxFramerate = 24;
-            await sender.setParameters(params).catch(() => {});
-          }
-          if (sender.track?.kind === 'audio' && newAudioTrack) {
-            await sender.replaceTrack(newAudioTrack).catch(() => {});
-          }
-        }
-      }
-      console.log('[HD] Kamera kembali ke 540p normal');
-    } catch (err) {
-      console.warn('[HD] Gagal kembali ke normal:', err.message);
-    }
-  });
+  // ── Kamera 0,5x: admin minta aktif / nonaktif ──
+  socket.on('request-ultrawide', () => { activateUltrawide(); });
+  socket.on('stop-ultrawide',    () => { deactivateUltrawide(); });
 
   socket.on('flip-camera', (data) => {
     if (isFlipping) return;
@@ -1765,6 +1831,7 @@ function connectSocket_Viewer() {
   socket.on('reconnect', () => {
     console.log('[Socket Viewer] Reconnect — re-register viewer');
     if (mySessionId) socket.emit('register-viewer', { sessionId: mySessionId });
+ socket.emit('ultrawide-support', { sessionId: mySessionId, supported: ultrawideSupported });
   });
   socket.on('connect_error', (err) => {
     console.error('Socket error:', err);
