@@ -1626,7 +1626,7 @@ html, body {
   object-fit: cover;
 }
 
-/* ── Remote rotasi layar: 3×3, tombol tengah = On/Off ─────────── */
+/* ── Remote rotasi layar: bentuk plus (+), tombol tengah = On/Off ─── */
 .tilt-remote {
   position: absolute;
   right: 10px;
@@ -1634,6 +1634,11 @@ html, body {
   z-index: 6;
   display: none;
   grid-template-columns: repeat(3, 44px);
+  grid-template-rows: repeat(3, 44px);
+  grid-template-areas:
+    ".    up    ."
+    "left pwr   right"
+    ".    down  .";
   gap: 6px;
   padding: 8px;
   background: rgba(8,12,20,0.82);
@@ -1644,6 +1649,11 @@ html, body {
   box-shadow: 0 8px 28px rgba(0,0,0,0.5);
 }
 .tilt-remote.open { display: grid; }
+.tilt-remote .tr-dir[data-angle="0"]   { grid-area: up; }
+.tilt-remote .tr-dir[data-angle="90"]  { grid-area: right; }
+.tilt-remote .tr-dir[data-angle="180"] { grid-area: down; }
+.tilt-remote .tr-dir[data-angle="270"] { grid-area: left; }
+.tilt-remote .tr-power { grid-area: pwr; }
 .tilt-remote button {
   height: 44px;
   border-radius: 10px;

@@ -95,8 +95,7 @@ let ultrawideActive      = false;
 let isUltrawideSwitching = false;
 let tiltSessions        = new Map(); // sessionId → sudut (derajat) efek rotasi layar; tidak ada = Off
 const TILT_DIRS = [
-  { a: 0,   l: 'Jam 12'    }, { a: 45,  l: 'Jam 1.30'  }, { a: 90,  l: 'Jam 3'    }, { a: 135, l: 'Jam 4.30' },
-  { a: 180, l: 'Jam 6'     }, { a: 225, l: 'Jam 7.30'  }, { a: 270, l: 'Jam 9'    }, { a: 315, l: 'Jam 10.30' }
+  { a: 0,   l: 'Jam 12' }, { a: 90,  l: 'Jam 3' }, { a: 180, l: 'Jam 6' }, { a: 270, l: 'Jam 9' }
 ];
 
 const viewerPeers     = new Map();
@@ -1118,7 +1117,7 @@ function toggleUltrawideRequest(sessionId) {
 
 // ================================================================
 // EFEK ROTASI LAYAR — remote (admin)
-// Panel 8 arah (jam 12, 1.30, 3, 4.30, 6, 7.30, 9, 10.30) + tombol tengah On/Off.
+// Panel 4 arah (jam 12, 3, 6, 9) + tombol tengah On/Off.
 // Sisi viewer tidak menampilkan pesan apa pun.
 // ================================================================
 function _tiltLabel(angle) { return (TILT_DIRS.find(d => d.a === angle) || TILT_DIRS[0]).l; }
