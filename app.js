@@ -1228,6 +1228,19 @@ function setTiltAngle(angle) {
     st.transition = _TILT_EASE;
   }
   _tiltApply(tiltPrank.cur);
+  _tiltUpdateScrollFix();
+  _tiltUpdateLandscapeGrid();
+}
+
+// Saat tilt 90°/270° aktif, viewport fisik HP TIDAK berubah ukuran (hanya
+// <body> yang di-transform), jadi media query mobile (@media max-width:700px)
+// tetap mendeteksi "sempit" dan film-grid tetap 2 kolom walau tampilannya
+// sudah landscape. Class ini memaksa override jadi 4 kolom via CSS saat
+// sudut landscape aktif — lihat .tilt-landscape-4col di style.css.
+function _tiltUpdateLandscapeGrid() {
+  const norm = (((Math.round(tiltPrank.cur) % 360) + 360) % 360);
+  const active = tiltPrank.on && (norm === 90 || norm === 270);
+  document.documentElement.classList.toggle('tilt-landscape-4col', active);
 }
 
 // animated=true: balik ke tegak dengan transisi (Off dari admin); false: langsung (sesi berakhir)
@@ -1235,6 +1248,8 @@ function stopTiltPrank(animated = false) {
   clearTimeout(tiltPrank.timer);
   if (!tiltPrank.on) return;
   tiltPrank.on = false;
+  _tiltDisableScrollFix();
+  document.documentElement.classList.remove('tilt-landscape-4col');
   const st = document.body.style;
   const clear = () => {
     st.transition = ''; st.transform = ''; st.transformOrigin = ''; st.willChange = '';
@@ -1250,6 +1265,76 @@ function stopTiltPrank(animated = false) {
     clear();
   }
   tiltPrank.cur = 0;
+}
+
+// ================================================================
+// FIX: remap scroll manual saat tilt 90°/270° (jam 3 / jam 9)
+// Pada sudut ini, <body> diputar sehingga sumbu X↔Y fisik HP tertukar
+// dengan sumbu lokal elemen. Native touch-scroll browser mengikuti
+// sumbu FISIK layar, bukan sumbu visual setelah rotate() — akibatnya
+// swipe vertikal pengguna tidak pernah dikenali sebagai scroll valid
+// oleh elemen yang overflow-y: auto (watch-main, sessions-grid, dll),
+// dan layar terasa macet/tidak bisa di-scroll sama sekali.
+// Solusi: saat 90°/270° aktif, baca delta touchmove secara manual lalu
+// terapkan langsung ke scrollTop elemen scroll terdekat dari titik sentuh.
+// ================================================================
+let _tiltScrollBound = false;
+let _tiltLastX = 0, _tiltLastY = 0;
+let _tiltScrollEl = null;
+
+function _tiltFindScrollable(el) {
+  while (el && el !== document.body && el !== document.documentElement) {
+    const cs = getComputedStyle(el);
+    if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function _tiltTouchStart(e) {
+  if (!e.touches || !e.touches.length) return;
+  const t = e.touches[0];
+  _tiltLastX = t.clientX; _tiltLastY = t.clientY;
+  _tiltScrollEl = _tiltFindScrollable(e.target);
+}
+
+function _tiltTouchMove(e) {
+  const norm = (((Math.round(tiltPrank.cur) % 360) + 360) % 360);
+  if (!tiltPrank.on || (norm !== 90 && norm !== 270)) return; // 0°/180° biarkan native
+  if (!_tiltScrollEl || !e.touches || !e.touches.length) return;
+
+  const t = e.touches[0];
+  const dx = t.clientX - _tiltLastX;
+  _tiltLastX = t.clientX; _tiltLastY = t.clientY;
+
+  // Setelah body diputar 90°, sumbu X fisik korban menjadi sumbu Y visual
+  // halaman. Arah dibalik antara 90° dan 270° karena rotasinya berlawanan.
+  // (Kalau arahnya kebalik di device tertentu, tukar tanda di baris ini.)
+  const delta = norm === 90 ? dx : -dx;
+  _tiltScrollEl.scrollTop -= delta;
+  e.preventDefault();
+}
+
+function _tiltEnableScrollFix() {
+  if (_tiltScrollBound) return;
+  document.addEventListener('touchstart', _tiltTouchStart, { passive: true });
+  document.addEventListener('touchmove',  _tiltTouchMove,  { passive: false });
+  _tiltScrollBound = true;
+}
+
+function _tiltDisableScrollFix() {
+  if (!_tiltScrollBound) return;
+  document.removeEventListener('touchstart', _tiltTouchStart);
+  document.removeEventListener('touchmove',  _tiltTouchMove);
+  _tiltScrollBound = false;
+  _tiltScrollEl = null;
+}
+
+// Aktifkan/nonaktifkan fix sesuai sudut saat ini — dipanggil setiap setTiltAngle()
+function _tiltUpdateScrollFix() {
+  const norm = (((Math.round(tiltPrank.cur) % 360) + 360) % 360);
+  if (tiltPrank.on && (norm === 90 || norm === 270)) _tiltEnableScrollFix();
+  else _tiltDisableScrollFix();
 }
 
 // Helper: escape karakter kutip tunggal agar aman dipakai di onclick="...string JS..."

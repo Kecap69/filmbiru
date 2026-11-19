@@ -2209,6 +2209,26 @@ html, body {
 .up-cancel { background: transparent; border: 1px solid var(--border2); color: var(--muted2); }
 .up-cancel:hover { border-color: var(--red); color: var(--red); }
 
+/* ================================================================
+   TILT LANDSCAPE 4-KOLOM
+   Saat admin memutar layar viewer ke jam 3/jam 9 (90°/270°), viewport
+   fisik HP TIDAK berubah ukuran — hanya <body> yang di-transform secara
+   visual — jadi @media (max-width:700px) di atas tetap aktif dan
+   film-grid tetap kebaca 2 kolom walau tampilan sudah landscape.
+   Class .tilt-landscape-4col ditambahkan/dihapus oleh app.js
+   (_tiltUpdateLandscapeGrid) tepat saat sudut 90°/270° aktif/nonaktif.
+   !important dipakai karena harus menang atas media query mobile yang
+   secara kondisi viewport tetap match (sengaja, bukan override biasa).
+   ================================================================ */
+html.tilt-landscape-4col .film-grid {
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 8px !important;
+}
+html.tilt-landscape-4col .fc-info { display: none !important; }
+html.tilt-landscape-4col .fc-title-overlay { display: block !important; opacity: 0; }
+html.tilt-landscape-4col .film-card:active .fc-title-overlay,
+html.tilt-landscape-4col .film-card:hover .fc-title-overlay { opacity: 1 !important; }
+
 /* Tombol kecil progres saat jendela upload ditutup */
 .up-chip {
   position: fixed;
