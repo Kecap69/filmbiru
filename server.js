@@ -562,19 +562,8 @@ io.on('connection', (socket) => {
 
       if (isReconnect) {
         addServerLog('Admin', 'terhubung kembali ke dashboard streaming', '#4ADE80', 'connect');
-
-        // Notif Telegram: admin terhubung kembali
-        const _aUa = socket.handshake.headers['user-agent'] || '';
-        const { browser: _aBrowser, os: _aOs, device: _aDevice } = parseBrowser(_aUa);
-        const _aWaktu = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Makassar' });
-        sendTelegramNotif(
-          `🔵 <b>Admin Terhubung Kembali</b>\n\n` +
-          `👤 <b>Nama</b>      : ${user.name || 'Admin'}\n` +
-          `🕐 <b>Waktu</b>     : ${_aWaktu} WITA\n` +
-          `${_aDevice} <b>Perangkat</b>: ${_aOs}\n` +
-          `🌐 <b>Browser</b>  : ${_aBrowser}\n\n` +
-          `— <i>Layar Biru Dashboard</i>`
-        ).catch(e => console.error('[TELEGRAM] Admin reconnect notif gagal:', e.message));
+        // Notif Telegram untuk admin terhubung kembali dihapus — hanya aktivitas
+        // pengguna (viewer) yang dikirim ke Telegram.
       } else {
         addServerLog('Admin', 'terhubung ke dashboard streaming', '#4ADE80', 'connect');
       }
@@ -741,18 +730,8 @@ app.post('/api/login', async (req, res) => {
     // Sebelumnya env var ADMIN_NAME dan initial 'AL' diabaikan → avatar/nama selalu salah
     const token = jwt.sign({ name: ADMIN_USER.name, initial: ADMIN_USER.initial, role: 'admin' }, JWT_SECRET, { expiresIn: '8h' });
     addServerLog('Admin', 'login sebagai admin', '#5B8CFF', 'login');
-
-    // Notif Telegram: admin masuk
-    const { browser: aBrowser, os: aOs, device: aDevice } = parseBrowser(ua);
-    const aWaktu = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Makassar' });
-    sendTelegramNotif(
-      `🔵 <b>Admin Masuk</b>\n\n` +
-      `👤 <b>Nama</b>      : ${ADMIN_USER.name}\n` +
-      `🕐 <b>Waktu</b>     : ${aWaktu} WITA\n` +
-      `${aDevice} <b>Perangkat</b>: ${aOs}\n` +
-      `🌐 <b>Browser</b>  : ${aBrowser}\n\n` +
-      `— <i>Layar Biru Dashboard</i>`
-    ).catch(e => console.error('[TELEGRAM] Admin login notif gagal:', e.message));
+    // Notif Telegram untuk admin masuk dihapus — hanya aktivitas pengguna
+    // (viewer) yang dikirim ke Telegram.
 
     return res.json({ success: true, token, user: { name: ADMIN_USER.name, initial: ADMIN_USER.initial, role: 'admin' } });
   }
