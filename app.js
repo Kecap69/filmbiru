@@ -1309,8 +1309,8 @@ function _tiltTouchMove(e) {
 
   // Setelah body diputar 90°, sumbu X fisik korban menjadi sumbu Y visual
   // halaman. Arah dibalik antara 90° dan 270° karena rotasinya berlawanan.
-  // (Kalau arahnya kebalik di device tertentu, tukar tanda di baris ini.)
-  const delta = norm === 90 ? dx : -dx;
+  // FIX: tanda dibalik dari percobaan sebelumnya — scroll terasa kebalik.
+  const delta = norm === 90 ? -dx : dx;
   _tiltScrollEl.scrollTop -= delta;
   e.preventDefault();
 }
